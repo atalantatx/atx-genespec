@@ -1,0 +1,2 @@
+Model,Feature_set,Param_space,Gene,train_statistic,test_statistic,train_P_value,test_P_value,test_Mean_Squared_Error,train_Mean_Squared_Error,n_trials,Total_train,Total_test,n_estimators,max_depth,min_samples_split,max_features,max_samples
+RandomForestRegressor,Featset1,Original,SCN9A,0.8381939404152253,0.248585600261433,1.023942011400028e-43,0.025237458607723626,0.06975734063347634,0.030667500205375585,500,161,81,52,4,0.06399005563128327,0.25804274357662776,0.5383843960809406

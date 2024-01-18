@@ -1,1 +1,3 @@
-# atx-genespec
+# Atalanta Therapeutics di-siRNA Gene Spec Model
+
+

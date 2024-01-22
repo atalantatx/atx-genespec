@@ -225,7 +225,7 @@ for i in range(doc["boostrap_reps"]):
         params = {
             # "n_estimators": trial.suggest_int("n_estimators", 1, 1000),
             "max_depth": trial.suggest_int("max_depth",doc["max_depth"]["low"],doc["max_depth"]["high"]),
-            # "max_features" : trial.suggest_float("max_features",doc["max_features"]["low"],doc["max_features"]["low"]),
+            "max_features" : trial.suggest_float("max_features",doc["max_features"]["low"],doc["max_features"]["low"]),
             # "max_samples" : trial.suggest_float("max_samples",doc["max_samples"]["low"],doc["max_samples"]["low"])
         }
 
@@ -367,7 +367,7 @@ for i in range(doc["boostrap_reps"]):
     trend_plot(
         predictions,
         y_test_scaled.array,
-        y_test,
+        y_test.array,
         title=study.study_name
         + " "
         + str(n_trials)
@@ -382,7 +382,7 @@ for i in range(doc["boostrap_reps"]):
     trend_plot(
         training_preds,
         y_train_scaled.array,
-        y_train,
+        y_train.array,
         title=study.study_name
         + " "
         + str(n_trials)
@@ -397,7 +397,7 @@ for i in range(doc["boostrap_reps"]):
     trend_plot(
         optimize_preds,
         y_opt_scaled.array,
-        y_opt,
+        y_opt.array,
         title=study.study_name
         + " "
         + str(n_trials)

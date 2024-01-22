@@ -204,8 +204,8 @@ def objective(trial):
 
 
 # n_trials=500
-# sampler = TPESampler(seed=5)
-sampler = RandomSampler(seed=5)
+sampler = TPESampler(seed=5)
+# sampler = RandomSampler(seed=5)
 study = optuna.create_study(
     direction="minimize", study_name=sel_target, sampler=sampler
 )

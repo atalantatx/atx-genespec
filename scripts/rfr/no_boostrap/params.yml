@@ -1,0 +1,9 @@
+sel_target: SCN9A
+n_trials: 10
+output_path: "../outputs/RandomForestRegressor/FeatureSet4/random_split/"
+features: disirna.all_features_v2.features_v2.parquet.gzip
+dataset: All_data_2023-09-22_scaled.csv
+random_state: 40
+train_frac: 0.8
+
+n_estimators: trial.suggest_int("n_estimators", 50, 150)

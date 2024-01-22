@@ -1,0 +1,9 @@
+sel_target: "SCN9A"
+n_trials: 10
+output_path: "../../../outputs/Lasso/FeatureSet4/random_split/"
+features: "../../../dataset/features/disirna.all_features_v2.features_v2.parquet.gzip"
+featset_columns: "../../../dataset/features/FeatSet4_columns.txt"
+dataset: "../../../dataset/All_data_2023-09-22/All_data_2023-09-22_scaled.csv"
+random_state: 14
+train_frac: 0.5
+boostrap_reps: 10

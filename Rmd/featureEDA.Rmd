@@ -1,0 +1,283 @@
+---
+title: "Feature EDA"
+---
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(arrow)
+library(ggpubr)
+library(purrr)
+library(naturalsort)
+library(mongolite)
+library(dotenv)
+library("combinat")
+```
+
+```{r}
+load_dot_env("~/.envs/mongodb.env")
+
+mongo_url = Sys.getenv("MONGODB_URL")
+
+sirna_features2 = mongolite::mongo(
+  collection = "sirna_features2",
+  db = "disirna",
+  url = mongo_url
+)
+```
+
+
+```{r}
+target_data = sirna_features2$find(
+  query='{"Gene":"SCN9A"}'
+)
+
+# target_data
+```
+
+```{r}
+dataset = fread("../dataset/All_data_2023-09-22/All_data_2023-09-22_scaled.csv",sep = ",") %>%
+  mutate(
+    Gene=gsub("PRNP.*","PRNP",Gene),
+    Oligo_ID=gsub("PRNP-Human|PRNP-Mouse","PRNP",Oligo_ID)
+  )
+
+dataset$Gene %>% table()
+```
+
+
+```{r}
+dataset_feature = merge(dataset,target_data,by = c("Oligo_ID","Gene"))
+dataset_feature %>% dim()
+```
+
+```{r}
+scn9a_data = dataset_feature %>%
+  filter(
+    Gene=="SCN9A"
+  ) 
+
+ggplot(dataset_feature,aes(x=exp_highdose,fill=Gene)) +
+  geom_histogram() + 
+  facet_wrap(Gene~.,scale="free")
+```
+
+# Continuous Variables
+```{r}
+# scn9a_data$G10_as_seq
+
+sel_pos_nuc_cols = cross(list(c("A","C","G","U"),2:21)) %>% 
+  map(paste,sep="",collapse="") %>% 
+  unlist()
+# sel_cols = c("Oligo_ID","CC","GG","UU","AA","exp_highdose")
+sel_cols = c("Oligo_ID",sel_pos_nuc_cols,"exp_highdose")
+print(sel_cols)
+plot_data = scn9a_data %>%
+  select(
+    any_of(sel_cols)
+  ) %>%
+  pivot_longer(
+    cols = !any_of(c("Oligo_ID","exp_highdose"))
+  )
+ggplot(plot_data,aes(x=value)) +
+  geom_histogram() +
+  facet_wrap(name~.)
+
+# ggplot(plot_data,aes(x=as.factor(C10),y=exp_highdose)) +
+#   geom_boxplot()
+
+# lm_out = lm(exp_highdose~C8,scn9a_data)
+# print(lm_out)
+
+ggplot(plot_data,aes(x=value,y=exp_highdose)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = T) +
+  facet_wrap(name~.)
+
+
+```
+
+# Binary Variables
+```{r}
+sel_pos_nuc_cols = cross(list(c("A","C","G","U"),2:21)) %>% 
+  map(paste,sep="",collapse="") %>% 
+  unlist() %>%
+  paste0("_as_seq")
+# sel_cols = c("Oligo_ID","CC","GG","UU","AA","exp_highdose")
+sel_cols = c("Oligo_ID",sel_pos_nuc_cols,"exp_highdose")
+plot_data = scn9a_data %>%
+  select(
+    any_of(sel_cols)
+  ) %>%
+  pivot_longer(
+    cols = any_of(sel_pos_nuc_cols)
+  ) #%>%
+  # merge(
+  #   feature_dict
+  # )
+
+p = plot_data %>%
+  filter(
+   # grepl("U",name),
+   # category == "PosNuc",
+   # size==1
+  ) %>%
+  mutate(
+    name=naturalfactor(name)
+  ) %>%
+ggpubr::ggboxplot(
+  # data = plot_data,
+  x="value",
+  y="exp_highdose",
+  fill = "value"
+  ) +
+  stat_compare_means(vjust = 0.5,label = "p.format") +
+  facet_wrap(
+    name~.,
+    ncol = 20
+  )
+
+ggsave(filename = "feature_comp_test.png",plot = p,width = 21,height = 8)
+
+```
+
+
+```{r}
+results = plot_data %>%
+  # filter(
+  #  category == "PosNuc",
+  #  size==1
+  # ) %>%
+  mutate(
+    value=as.factor(value)
+  ) %>%
+  group_by(
+    name
+  ) %>%
+  group_map(
+    ~ {
+      test_res = wilcox.test(exp_highdose~value,data=.,paired = F)
+      # test_res = t.test(exp_highdose~value,data=.,paired = F)
+      out = list()
+      # out["group"] = .y
+      out["statistic"] = test_res$statistic
+      out["p.value"] = test_res$p.value
+      # out["data.name"] = test_res$data.name
+      cbind(as.data.table(out),.y)
+    }
+  ) %>% 
+  rbindlist()
+
+plot_pos = results %>%
+  extract(
+    name, 
+    into = c("nuc","pos"),
+    regex = "([ACGU])([0-9]+)"
+    ) %>%
+  mutate(
+    pos=as.numeric(pos),
+    p.value = as.numeric(p.value)
+  )
+
+ggplot(plot_pos,aes(x=pos,y=nuc,fill=p.value),color="white") +
+  geom_tile() +
+  geom_text(aes(label=round(-10*log(`p.value`),2)),color="white",size=4) +
+  theme_linedraw() #+
+  # facet_wrap(Gene~.)
+
+ggsave("all_oligo_heatmap.png",width = 16,height = 6)
+```
+
+```{r}
+sig_cols = results %>%
+  mutate( adj.pval=p.value ) %>%
+  filter( adj.pval<0.9 ) %>%
+  pull(name) %>% unique()
+
+# sig_cols = feature_dict %>%
+#   filter( category=="Composition", size %in% c(1,2)
+#   ) %>%
+#   pull( name )
+
+scn9a_data = dataset_feature %>%
+  filter( Gene=="SCN9A" ) %>%
+  mutate(
+    # exp_highdose = scale(max(exp_highdose) - exp_highdose)[,1]
+    # exp_highdose = scale((max(exp_highdose) - exp_highdose)/max(exp_highdose))[,1]
+    )  
+
+test_oligo = sample(scn9a_data$Oligo_ID,30)
+test_data = scn9a_data %>%
+  filter(
+    Oligo_ID %in% test_oligo
+  )
+hist(test_data$exp_highdose)
+
+train_data = scn9a_data %>%
+  filter(
+    !(Oligo_ID %in% test_oligo)
+  )
+hist(train_data$exp_highdose)
+
+my_fit = lm(
+  formula = paste0("exp_highdose ~ ",paste0(sig_cols,collapse = " + ")),
+  data = train_data
+  # family=binomial()
+)
+summary(my_fit)
+
+pred_table = cbind(
+  Oligo_ID = test_data$Oligo_ID,
+  exp_highdose = test_data$exp_highdos,
+  preds = predict(my_fit, test_data, type="response")
+) %>%
+  as.data.table() %>%
+  mutate(
+    exp_highdose = as.numeric(exp_highdose),
+    preds = as.numeric(preds),
+    diff = abs(exp_highdose-preds)
+  )
+
+cor.test(
+  pred_table$exp_highdose,
+  pred_table$preds,
+  method = "spearman"
+)
+
+ggplot(
+  pred_table,
+  aes(
+    x=preds,
+    y=exp_highdose
+  )
+) + geom_point()
+
+
+plot(my_fit)
+```
+
+
+```{r}
+hist_data =  scn9a_data %>%
+  select(Oligo_ID,exp_highdose) %>%
+  mutate(
+    exp_sq = (exp_highdose/100)^2,
+    exp_log = log(exp_highdose/100),
+    exp_rt = sqrt((max(exp_highdose)-(exp_highdose))/100)
+  ) %>% 
+  pivot_longer(
+    cols = !Oligo_ID
+  )
+
+ggplot(hist_data,aes(x=value)) +
+  geom_histogram() +
+  facet_wrap(name~.,scales = "free")
+
+```
+
+
+
+```{r}
+pca
+```
+

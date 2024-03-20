@@ -1,27 +1,32 @@
+#!/usr/bin/env python
 # %%
 import pandas as pd
 import xgboost as xgb
 import numpy as np
 import optuna
 from optuna.samplers import TPESampler, RandomSampler
-import pickle
-import os
+import pickle, os, yaml
 import matplotlib.pyplot as plt
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 from scipy.stats import pearsonr, linregress
-from sklearn.ensemble import RandomForestRegressor, RandomForestRegressor
-
+# from sklearn.ensemble import RandomForestRegressor, RandomForestRegressor
+from sklearn.linear_model import Lasso, LassoCV, Ridge, RidgeCV,  ElasticNet, ElasticNetCV
 from sklearn.preprocessing import MinMaxScaler
 
-sel_target = "SCN9A"
-n_trials = 10
-output_path = "../outputs/RandomForestRegressor/FeatureSet4/random_split/"
+with open('scn9a_params.yml', 'r') as file:
+    doc = yaml.safe_load(file)
+
+sel_target = doc["sel_target"]
+n_trials = doc["n_trials"]
+output_path = doc["output_path"] #"../outputs/RandomForestRegressor/FeatureSet4/random_split/"
+
+os.makedirs(output_path, exist_ok=True)
 
 activity_cols = ["Oligo_ID", "Gene Species", "Scaled", "Train-Test-Split", "Screen"]
 
 # %%
-feature_columns = [line.strip() for line in open("FeatSet4_columns.txt").readlines()]
-dataset = pd.read_parquet("disirna.all_features_v2.features_v2.parquet.gzip")
+feature_columns = [line.strip() for line in open(doc["featset_columns"]).readlines()]
+dataset = pd.read_parquet(doc["features"])
 dataset["Oligo_ID"] = dataset["Oligo_ID"].str.replace(
     "PRNP-Human|PRNP-Mouse", "PRNP", regex=True
 )
@@ -31,19 +36,19 @@ dataset["Gene"] = dataset["Gene"].str.replace(
 print(sum(dataset.columns.isin(["Gene"])))
 
 
-scaled_data = pd.read_csv("All_data_2023-09-22_scaled.csv")
+scaled_data = pd.read_csv(doc["dataset"])
 scaled_data["Scaled"] = scaled_data["scaled"]
 merge_dataset = dataset.merge(
     scaled_data, on=["Oligo_ID", "Gene"], how="inner", copy=True
 )
 
-merge_dataset.shape
+print(merge_dataset.shape)
 
 # %%
 
-random_state = 40
-train_frac = 0.8
-# random_state = np.random.randint(low=1, high=1000)
+random_state = doc["random_state"]
+train_frac = doc["train_frac"]
+# random_states = np.random.randint(low=1, high=1000)
 gene_data = pd.DataFrame(merge_dataset.loc[merge_dataset["Gene"] == sel_target])
 train = pd.DataFrame(gene_data.sample(frac=train_frac, random_state=random_state))
 
@@ -63,6 +68,7 @@ print("Num of Test", test.shape[0])
 print("Num of Test in Train", sum(test["Oligo_ID"].isin(train["Oligo_ID"])))
 print("Num of Test in Optimize", sum(optimize["Oligo_ID"].isin(test["Oligo_ID"])))
 print("Num of Optimize in Train", sum(optimize["Oligo_ID"].isin(train["Oligo_ID"])))
+
 
 # %%
 train["Scaled"] = train["Scaled"]
@@ -156,7 +162,7 @@ print(X_test.shape)
 # study = create_study(direction='minimize', study_name=gene_species)
 model_path = f"{output_path}/model"
 model_filename = f"{model_path}_{sel_target}_pt_xgbr_trail_{n_trials}_featset1_orig.pkl"
-
+# exit()
 
 # %%
 plt.hist(y_opt, density=True)
@@ -166,18 +172,12 @@ plt.hist(y_test, density=True, alpha=0.5)
 # Define the objective function
 def objective(trial):
     params = {
-        "n_estimators": trial.suggest_int("n_estimators", 50, 150),
-        "max_depth": trial.suggest_int("max_depth", 4, 4),
-        "min_samples_split": trial.suggest_float("min_samples_split", 0, 1),
-        "max_features": trial.suggest_float("max_features", 0.2, 0.5),
-        "max_samples": trial.suggest_float("max_samples", 0, 0.5),
-        # "min_samples_leaf": trial.suggest_int('min_samples_leaf', 2, 10),
-        # "max_features": trial.suggest_categorical('max_features', ['log2', 'sqrt',None]),
-        # "max_leaf_nodes": trial.suggest_int('max_leaf_nodes', 10, 100),
-        # "bootstrap": trial.suggest_categorical('bootstrap', [True, False]),
+        "n_alphas": trial.suggest_int("n_alphas", 1, 1000),
+        "fit_intercept": trial.suggest_categorical("fit_intercept",[True,False]),
+        "eps" : trial.suggest_float("eps",0,0.1)
     }
 
-    model = RandomForestRegressor(**params, n_jobs=16, random_state=7, bootstrap=True)
+    model = LassoCV(**params, n_jobs=16, random_state=random_state,max_iter=10000,selection="random")
     # model = xgb.XGBRegressor(n_estimators=n_estimators, max_depth=max_depth, reg_alpha=reg_alpha, gamma=gamma,
     #     reg_lambda=reg_lambda, colsample_bytree=colsample_bytree, min_child_weight=min_child_weight,
     #     learning_rate=learning_rate, objective='reg:squarederror',subsample=subsample, n_jobs=64, seed=51)
@@ -200,14 +200,14 @@ def objective(trial):
 
     # res = pearsonr(y_test, y_pred) #Unable to use statistic with xgb
     # statistic = res.statistic
-    return mae
+    return r2score
 
 
 # n_trials=500
 # sampler = TPESampler(seed=5)
 sampler = RandomSampler(seed=5)
 study = optuna.create_study(
-    direction="minimize", study_name=sel_target, sampler=sampler
+    direction="maximize", study_name=sel_target, sampler=sampler
 )
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 study.optimize(objective, n_trials=n_trials, n_jobs=1, show_progress_bar=True)
@@ -215,9 +215,9 @@ study.optimize(objective, n_trials=n_trials, n_jobs=1, show_progress_bar=True)
 
 best_params = study.best_params
 print(best_params)
-model = RandomForestRegressor(
+model = LassoCV(
     **best_params,
-    random_state=51,
+    random_state=random_state,
     n_jobs=16,
 )
 model.fit(X_train, y_train)
@@ -225,6 +225,7 @@ with open(model_filename, "wb") as f:
     pickle.dump(model, f)
 scaler = MinMaxScaler()
 predictions = model.predict(X_test)
+print(model.score(X_test,y_test))
 training_preds = model.predict(X_train)
 optimize_preds = model.predict(X_opt)
 

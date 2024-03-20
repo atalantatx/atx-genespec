@@ -1,0 +1,19 @@
+sel_target: "SCN9A"
+n_trials: 50
+output_path: "../../../outputs/XGBRegressor/FeatureSet4/random_split/"
+features: "../../../dataset/features/disirna.all_features_v2.features_v2.parquet.gzip"
+# features: "/lustre-persistent/users/wkokulapalan/projects/model_selection/model_selection/feature-generation/feature_sets/FeatSet4/disirna.all_features_v2.features_v3.parquet.gzip"
+featset_columns: "../../../dataset/features/FeatSet4_columns.txt"
+dataset: "../../../dataset/All_data_2023-09-22/All_data_2023-09-22_scaled.csv"
+# random_state: 14
+threshold: 0.25
+train_frac: 0.6
+boostrap_reps: 10
+add_genes: ["HTT"]
+n_estimators: 100
+max_depth: 
+  low: 2
+  high: 100
+max_leaves:
+  low: 2
+  high: 10

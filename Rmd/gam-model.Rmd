@@ -1,0 +1,182 @@
+---
+title: "Target antisense oligo "
+---
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(arrow)
+library(ggpubr)
+library(purrr)
+library(naturalsort)
+library(mongolite)
+library(dotenv)
+library("combinat")
+library(mgcv)
+library("parallel")
+
+sel_targets=c("MAPT","SNCA")
+dir.create(file.path("plots",sel_target),showWarnings = F,recursive = T)
+```
+
+```{r}
+dataset = fread("../dataset/All_data_2023-09-22/All_data_2023-09-22_scaled.csv",sep = ",") %>%
+  mutate(
+    Gene=gsub("PRNP.*","PRNP",Gene),
+    Oligo_ID=gsub("PRNP-Human|PRNP-Mouse","PRNP",Oligo_ID)
+  ) 
+dataset$Gene %>% table()
+```
+
+```{r}
+load_dot_env("~/.envs/mongodb.env")
+
+mongo_url = Sys.getenv("MONGODB_URL")
+
+sirna_features2 = mongolite::mongo(
+  collection = "sirna_features2",
+  db = "disirna",
+  url = mongo_url,
+  verbose = T
+)
+```
+
+
+```{r}
+query = list(Gene=list("$in"=sel_targets))
+system.time({
+  it = sirna_features2$iterate(
+    query=jsonlite::toJSON(query,auto_unbox = T),
+    fields = jsonlite::toJSON(list(GeneRegex=0),auto_unbox = T)
+  )
+  target_batch = it$batch(size = 100000)
+  target_data = target_batch %>% rbindlist(fill = T)
+})
+```
+
+
+
+
+```{r}
+dataset_feature = merge(dataset,target_data,by = c("Oligo_ID","Gene"))
+dataset_feature %>% dim()
+
+sel_var = c(value="C18_as_seq")
+sel_col = c("exp_highdose",sel_var)
+data_test = dataset_feature %>%
+  select(any_of(sel_col)) #%>%
+  # rename(all_of(sel_var))
+wc_out = wilcox.test(
+  formula=exp_highdose ~ value,
+  data=data_test,
+  alternative="greater"
+  )
+# wc_out
+
+lm_out = lm(
+  formula=exp_highdose ~ ass_ass_mfe + duplex_mfe+ ss_ss_mfe + ss_mfe + ass_mfe + G14_as_seq,
+  data=dataset_feature
+  )
+summary(lm_out)
+```
+
+
+```{r}
+plot(lm_out)
+
+plot(
+  y=predict(lm_out,dataset_feature),
+  x=dataset_feature$exp_highdose
+)
+
+hist(dataset_feature$exp_highdose)
+
+cor(
+  predict(lm_out,dataset_feature),
+  dataset_feature$exp_highdose,
+  method = "spearman"
+)
+```
+
+
+```{r eval=FALSE, include=FALSE}
+sel_pos_nuc_cols = cross(list(c("A","C","G","U"),c(2:21))) %>% 
+  map(paste,sep="",collapse="") %>% 
+  unlist() %>%
+  paste0("_as_seq")
+
+out  = mclapply(seq(100),function(x){
+  set.seed(x)
+  sample <- sample(c(TRUE, FALSE), nrow(dataset_feature), replace=TRUE, prob=c(0.6,0.4))
+  # print(sum(which(sample)))
+  sample_data = dataset_feature[sample]
+  pivot_sample = sample_data %>%
+  select(
+    any_of(c("Oligo_ID",sel_pos_nuc_cols,"exp_highdose"))
+  ) %>% 
+  pivot_longer(
+    cols = sel_pos_nuc_cols
+  )
+  
+  train_signif = pivot_sample %>%
+  group_by(
+    name
+  ) %>%
+  filter(
+    length(unique(value))==2
+  ) %>%
+  group_map(~{
+    if(length(unique(.x$value)) == 2){
+      greater_out = broom::glance(
+        wilcox.test(exp_highdose~value,data=.,alternative="greater")
+        )
+      less_out = broom::glance(
+        wilcox.test(exp_highdose~value,data=.,alternative="less")
+        )
+      
+      all_dfs = rbind(
+        cbind(greater_out,type="greater",.y),
+        cbind(less_out,type="less",.y)
+      )
+      
+      all_dfs
+    }
+  }) %>%
+  rbindlist() %>%
+    mutate(
+      random_seed = x
+    )
+  train_signif
+  
+},mc.cores = 4) %>% rbindlist() %>%
+  mutate(
+    name=naturalfactor(name)
+  )
+
+plot_data = out %>%
+  extract(
+    name,
+    into = c("Nuc","Pos"),
+    regex = "^([A-Z])([0-9]+)_"
+  ) %>% mutate(
+    Pos=naturalfactor(Pos),
+    Nuc=naturalfactor(Nuc)
+  )
+ 
+p = ggplot(plot_data,aes(x=type,y=p.value,fill=type)) +
+  geom_boxplot(position = position_dodge2(width = 0.2)) +
+  facet_grid(Nuc~Pos) +
+  theme_linedraw(base_size = 16) +
+  theme(
+    axis.text.x = element_blank(),
+    panel.spacing = unit(0,"lines"),
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  labs(
+    title="SCN9A Wilcox-Test Results Plot"
+  )
+
+ggsave(filename = file.path("plots",sel_target,"p.value.dist.png"),plot = p,width = 15,height = 8)
+```
+
+

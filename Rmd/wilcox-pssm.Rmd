@@ -1,0 +1,270 @@
+---
+title: "Target antisense oligo "
+---
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(arrow)
+library(ggpubr)
+library(purrr)
+library(naturalsort)
+library(mongolite)
+library(dotenv)
+library("combinat")
+
+sel_target="SCN9A"
+dir.create(file.path("plots",sel_target),showWarnings = F,recursive = T)
+```
+
+```{r}
+load_dot_env("~/.envs/mongodb.env")
+
+mongo_url = Sys.getenv("MONGODB_URL")
+
+sirna_features2 = mongolite::mongo(
+  collection = "sirna_features2",
+  db = "disirna",
+  url = mongo_url
+)
+```
+
+
+```{r}
+it = sirna_features2$iterate(
+  query=paste0('{"Gene":"',sel_target,'"}')
+)
+system.time({
+  target_data = it$batch(size = 20000) %>% rbindlist(fill = T)
+})
+target_data %>% dim()
+```
+
+```{r}
+dataset = fread("../dataset/All_data_2023-09-22/All_data_2023-09-22_scaled.csv",sep = ",") %>%
+  mutate(
+    Gene=gsub("PRNP.*","PRNP",Gene),
+    Oligo_ID=gsub("PRNP-Human|PRNP-Mouse","PRNP",Oligo_ID)
+  ) 
+dataset$Gene %>% table()
+```
+
+
+```{r}
+dataset_feature = merge(dataset,target_data,by = c("Oligo_ID","Gene"))
+dataset_feature %>% dim()
+```
+
+```{r}
+dataset_feature %>%
+  filter(exp_highdose<60)
+```
+
+
+```{r}
+
+ggplot(dataset_feature,aes(x=exp_highdose,fill=Gene)) +
+  geom_histogram() + 
+  facet_wrap(Gene~.,scale="free")
+```
+
+# Anti-sense PSSM
+```{r}
+sel_pos_nuc_cols = cross(list(c("A","C","G","U"),2:21)) %>% 
+  map(paste,sep="",collapse="") %>% 
+  unlist() %>%
+  paste0("_as_seq")
+# sel_cols = c("Oligo_ID","CC","GG","UU","AA","exp_highdose")
+sel_cols = c("Oligo_ID",sel_pos_nuc_cols,"exp_highdose")
+plot_data = dataset_feature %>%
+  select(
+    any_of(sel_cols)
+  ) %>%
+  pivot_longer(
+    cols = any_of(sel_pos_nuc_cols)
+  ) %>%
+  extract(
+    name, 
+    remove = F,
+    into = c("nuc","pos"),
+    regex = "([ACGU])([0-9]+)"
+    ) %>%
+  mutate(
+    pos=naturalfactor(pos),
+    nuc=naturalfactor(nuc)
+  )
+
+p = plot_data %>%
+  filter(
+   # grepl("U",name),
+   # category == "PosNuc",
+   # size==1
+  ) %>%
+  mutate(
+    name=naturalfactor(name)
+  ) %>%
+ggpubr::ggboxplot(
+  # data = plot_data,
+  x="value",
+  y="exp_highdose",
+  fill = "value",
+  facet.by = c("nuc","pos"),
+  ggtheme = theme_linedraw()
+  ) +
+  stat_compare_means(
+    vjust = 0.5,label = "p.format"
+    ) +
+  labs(
+    title = sel_target
+  ) +
+  theme(
+    panel.spacing = unit(0,'lines'),
+     plot.title = element_text(hjust = 0.5) 
+  )
+
+ggsave(filename = file.path("plots",sel_target,"feature_comp_test.png"),plot = p,width = 21,height = 8)
+
+```
+
+
+```{r}
+results = plot_data %>%
+  # filter(
+  #  category == "PosNuc",
+  #  size==1
+  # ) %>%
+  mutate(
+    value=as.factor(value)
+  ) %>%
+  group_by(
+    name
+  ) %>%
+  group_map(
+    ~ {
+      test_res = wilcox.test(exp_highdose~value,data=.,paired = F)
+      # test_res = t.test(exp_highdose~value,data=.,paired = F)
+      out = list()
+      # out["group"] = .y
+      out["statistic"] = test_res$statistic
+      out["p.value"] = test_res$p.value
+      # out["data.name"] = test_res$data.name
+      cbind(as.data.table(out),.y)
+    }
+  ) %>% 
+  rbindlist()
+
+plot_pos = results %>%
+  extract(
+    name, 
+    into = c("nuc","pos"),
+    regex = "([ACGU])([0-9]+)"
+    ) %>%
+  mutate(
+    pos=naturalfactor(pos),
+    p.value = as.numeric(p.value),
+    score = -10*log(p.value)
+  )
+
+print(plot_pos)
+
+ggplot(plot_pos,aes(x=pos,y=nuc,fill=p.value),color="white") +
+  geom_tile() +
+  geom_text(aes(label=round(score,2)),color="white",size=4) +
+  theme_linedraw() +
+  labs(  title = sel_target ) + 
+  theme( plot.title = element_text(hjust = 0.5) )
+  # facet_wrap(Gene~.)
+
+ggsave(file.path("plots",sel_target,"all_oligo_heatmap.png"),width = 16,height = 6)
+```
+
+```{r}
+plot_data = dataset_feature %>%
+  select(
+    any_of(sel_cols)
+  ) %>%
+  pivot_longer(
+    cols = any_of(sel_pos_nuc_cols)
+  ) %>%
+  extract(
+    name, 
+    remove = F,
+    into = c("nuc","pos"),
+    regex = "([ACGU])([0-9]+)"
+    ) %>%
+  mutate(
+    pos=naturalfactor(pos),
+    nuc=naturalfactor(nuc)
+  )
+
+
+active_pfm = plot_data %>%
+  slice_max(exp_highdose,prop = 0.25) %>%
+  group_by(
+    nuc,pos
+  ) %>%
+  summarise(
+    active_count=sum(value)
+  )
+
+inactive_pfm = plot_data %>%
+  slice_min(exp_highdose,prop = 0.25) %>%
+  group_by(
+    nuc,pos
+  ) %>%
+  summarise(
+    inactive_count=sum(value)
+  )
+
+merge(active_pfm,inactive_pfm)
+```
+
+
+```{r}
+target_pos_nuc = target_data %>%
+  select(Oligo_ID,antisense_oligo) %>%
+  separate(
+    antisense_oligo,
+    as.character(0:21),
+    sep="",
+    remove = F
+  ) %>%
+    pivot_longer(
+      cols = !c(Oligo_ID,antisense_oligo),
+      names_to = "pos",
+      values_to = "nuc"
+    ) %>%
+  filter(
+    pos!=c("0","1")
+  ) %>%
+  mutate(
+    pos=naturalfactor(pos)
+  )
+
+```
+
+```{r}
+pre_pssm_score_df = left_join(
+  target_pos_nuc,
+  plot_pos,
+  by=c("pos","nuc")
+)
+
+score_df = pre_pssm_score_df %>%
+  group_by(
+    Oligo_ID,antisense_oligo
+  ) %>%
+  summarize(
+    full_score = sum(score)
+  ) %>%
+  merge(
+    dataset %>% select(Oligo_ID,exp_highdose,Gene),
+    by="Oligo_ID"
+  )
+
+
+ggplot(score_df,aes(x=full_score,y=exp_highdose)) +
+  geom_point() +
+  geom_smooth()
+
+```
